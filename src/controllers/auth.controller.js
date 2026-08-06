@@ -1,10 +1,22 @@
 const jwt = require('jsonwebtoken');
 const { createClient } = require('@supabase/supabase-js');
+const WebSocket = require('ws'); // 1. Import WebSocket library
 const { pool } = require('../config/db');
 
+// 2. Pass WebSocket inside the realtime transport config
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  {
+    auth: {
+      persistSession: false,
+    },
+    realtime: {
+      transport: {
+        websocket: WebSocket,
+      },
+    },
+  }
 );
 
 async function getPermissionsForRole(roleName) {
