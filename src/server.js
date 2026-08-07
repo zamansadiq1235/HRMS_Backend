@@ -47,4 +47,4 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 8000;
-app.listen(PORT, () => console.log(`HR SaaS API running on port http://localhost:${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`HR SaaS API running on port ${PORT}`));
