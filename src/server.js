@@ -17,6 +17,7 @@ const expensesRoutes = require('./routes/expenses.routes');
 const meetingsRoutes = require('./routes/meetings.routes');
 const leaveRoutes = require('./routes/leave.routes');
 const payrollRoutes = require('./routes/payroll.routes');
+const profileRoutes = require('./routes/profile.routes');
 
 const app = express();
 
@@ -40,6 +41,7 @@ app.use('/api/expenses', expensesRoutes);
 app.use('/api/meetings', meetingsRoutes);
 app.use('/api/leave', leaveRoutes);
 app.use('/api/payroll', payrollRoutes);
+app.use('/api/employees/me', profileRoutes);
 
 app.use((err, req, res, next) => {
   console.error(err);
