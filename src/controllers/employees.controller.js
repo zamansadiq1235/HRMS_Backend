@@ -1,11 +1,15 @@
 const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { queryAsTenant, pool } = require('../config/db');
+const { notify } = require('../utils/notify');
 
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
+
+const AVATAR_BUCKET = 'avatars';
+const ALLOWED_GENDERS = ['male', 'female', 'other', 'prefer_not_to_say'];
 
 function generateTempPassword() {
   return crypto.randomBytes(9).toString('base64').replace(/[+/=]/g, 'x').slice(0, 12);
@@ -25,9 +29,9 @@ async function listEmployees(req, res) {
     const result = await queryAsTenant(
       req.tenantContext,
       `select e.id, e.employee_code, e.designation, e.employment_status,
-              e.phone, e.address, e.education, e.tech_skills, e.experience_years,
+              e.phone, e.address, e.gender, e.education, e.tech_skills, e.experience_years,
               e.department_id, e.branch_id, e.date_of_joining,
-              u.full_name, u.email, u.status as account_status
+              u.full_name, u.email, u.avatar_url, u.status as account_status
        from employees e
        join users u on u.id = e.user_id
        order by u.full_name`
@@ -38,11 +42,35 @@ async function listEmployees(req, res) {
     res.status(500).json({ error: 'Failed to fetch employees' });
   }
 }
+/**
+ * Lightweight "company directory" — just id, name, designation, avatar.
+ * Unlike listEmployees (gated by employee.view, admin/HR only), this is
+ * available to ANY authenticated employee, since picking a coworker to
+ * message or assign shouldn't require full employee-management access.
+ */
+async function listDirectory(req, res) {
+  try {
+    const result = await queryAsTenant(
+      req.tenantContext,
+      `select e.id, u.full_name, e.designation, u.avatar_url
+       from employees e
+       join users u on u.id = e.user_id
+       where e.employment_status = 'active'
+       order by u.full_name`
+    );
+    res.json({ employees: result.rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch directory' });
+  }
+}
+
 
 async function createEmployee(req, res) {
   const {
-    email, fullName, phone, address, education, techSkills, experienceYears,
+    email, fullName, phone, address, gender, education, techSkills, experienceYears,
     designation, departmentId, branchId, dateOfJoining, roleName,
+    avatarBase64, avatarExt, // both optional — if omitted, employee adds their own photo later
   } = req.body;
 
   if (!email || !fullName) {
@@ -55,6 +83,7 @@ async function createEmployee(req, res) {
     return res.status(403).json({ error: 'Only a company admin can create an HR manager' });
   }
 
+  const genderValue = ALLOWED_GENDERS.includes(gender) ? gender : null;
   const tempPassword = generateTempPassword();
   const client = await pool.connect();
   try {
@@ -77,10 +106,30 @@ async function createEmployee(req, res) {
       throw new Error(createError?.message || 'Failed to create login account');
     }
 
+    // Optional avatar — uploaded before the users row so avatar_url can be
+    // set in the same insert. A failed upload never blocks employee
+    // creation; avatarUrl just stays null and they can add one later from
+    // their own Profile screen.
+    let avatarUrl = null;
+    if (avatarBase64 && avatarExt) {
+      try {
+        const buffer = Buffer.from(avatarBase64, 'base64');
+        const filePath = `${created.user.id}/avatar.${avatarExt}`;
+        const { error: uploadError } = await supabaseAdmin.storage
+          .from(AVATAR_BUCKET)
+          .upload(filePath, buffer, { contentType: `image/${avatarExt}`, upsert: true });
+        if (!uploadError) {
+          avatarUrl = supabaseAdmin.storage.from(AVATAR_BUCKET).getPublicUrl(filePath).data.publicUrl;
+        }
+      } catch (avatarErr) {
+        console.error('Avatar upload failed during employee creation:', avatarErr);
+      }
+    }
+
     await client.query(
-      `insert into users (id, company_id, role_id, email, full_name, status)
-       values ($1, $2, $3, $4, $5, 'active')`,
-      [created.user.id, req.tenantContext.companyId, roleId, email, fullName]
+      `insert into users (id, company_id, role_id, email, full_name, avatar_url, status)
+       values ($1, $2, $3, $4, $5, $6, 'active')`,
+      [created.user.id, req.tenantContext.companyId, roleId, email, fullName, avatarUrl]
     );
 
     const employeeCode = await nextEmployeeCode(req.tenantContext.companyId);
@@ -88,20 +137,29 @@ async function createEmployee(req, res) {
     const { rows: employeeRows } = await client.query(
       `insert into employees
          (company_id, user_id, employee_code, designation, department_id, branch_id,
-          date_of_joining, phone, address, education, tech_skills, experience_years)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          date_of_joining, phone, address, gender, education, tech_skills, experience_years)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        returning id, employee_code, designation, department_id, branch_id,
-                 date_of_joining, phone, address, education, tech_skills, experience_years`,
+                 date_of_joining, phone, address, gender, education, tech_skills, experience_years`,
       [
         req.tenantContext.companyId, created.user.id, employeeCode, designation || null,
         departmentId || null, branchId || null, dateOfJoining || null, phone || null,
-        address || null, JSON.stringify(education || []), techSkills || [], experienceYears || null,
+        address || null, genderValue, JSON.stringify(education || []), techSkills || [],
+        experienceYears || null,
       ]
     );
 
     await client.query('COMMIT');
+
+    await notify({
+      companyId: req.tenantContext.companyId,
+      userId: created.user.id,
+      title: 'Welcome!',
+      body: `Your account has been created. Employee ID: ${employeeCode}`,
+    });
+
     res.status(201).json({
-      employee: { ...employeeRows[0], email, fullName, role: targetRole },
+      employee: { ...employeeRows[0], email, fullName, avatarUrl, role: targetRole },
       loginCredentials: {
         employeeId: employeeRows[0].employee_code,
         email,
@@ -124,7 +182,7 @@ async function createEmployee(req, res) {
 async function updateEmployee(req, res) {
   const { id } = req.params;
   const {
-    email, fullName, phone, address, education, techSkills, experienceYears,
+    email, fullName, phone, address, gender, education, techSkills, experienceYears,
     designation, departmentId, branchId, dateOfJoining, roleName, accountStatus, employmentStatus,
   } = req.body;
 
@@ -139,6 +197,9 @@ async function updateEmployee(req, res) {
   }
   if (techSkills !== undefined && !Array.isArray(techSkills)) {
     return res.status(400).json({ error: 'techSkills must be an array' });
+  }
+  if (gender !== undefined && gender !== null && !ALLOWED_GENDERS.includes(gender)) {
+    return res.status(400).json({ error: `gender must be one of: ${ALLOWED_GENDERS.join(', ')}` });
   }
 
   const allowedRoles = ['employee', 'hr_manager'];
@@ -163,9 +224,7 @@ async function updateEmployee(req, res) {
     ]);
 
     const { rows: existingRows } = await client.query(
-      `select e.id, e.user_id
-       from employees e
-       where e.id = $1`,
+      `select e.id, e.user_id from employees e where e.id = $1`,
       [id]
     );
     if (existingRows.length === 0) {
@@ -211,6 +270,7 @@ async function updateEmployee(req, res) {
     };
     if (phone !== undefined) addEmployeeValue('phone', phone || null);
     if (address !== undefined) addEmployeeValue('address', address || null);
+    if (gender !== undefined) addEmployeeValue('gender', gender || null);
     if (education !== undefined) addEmployeeValue('education', JSON.stringify(education));
     if (techSkills !== undefined) addEmployeeValue('tech_skills', techSkills);
     if (experienceYears !== undefined) addEmployeeValue('experience_years', experienceYears || null);
@@ -229,9 +289,9 @@ async function updateEmployee(req, res) {
 
     const { rows } = await client.query(
       `select e.id, e.employee_code, e.designation, e.employment_status,
-              e.phone, e.address, e.education, e.tech_skills, e.experience_years,
+              e.phone, e.address, e.gender, e.education, e.tech_skills, e.experience_years,
               e.department_id, e.branch_id, e.date_of_joining,
-              u.full_name, u.email, u.status as account_status, r.name as role
+              u.full_name, u.email, u.avatar_url, u.status as account_status, r.name as role
        from employees e
        join users u on u.id = e.user_id
        join roles r on r.id = u.role_id
@@ -294,4 +354,4 @@ async function deleteEmployee(req, res) {
   }
 }
 
-module.exports = { listEmployees, createEmployee, updateEmployee, deleteEmployee };
+module.exports = { listEmployees, createEmployee, updateEmployee, deleteEmployee, listDirectory };

@@ -12,5 +12,6 @@ router.get('/', requirePermission('employee.view'), listEmployees);
 router.post('/', requirePermission('employee.invite'), createEmployee);
 router.patch('/:id', requirePermission('employee.invite'), updateEmployee);
 router.delete('/:id', requirePermission('employee.invite'), deleteEmployee);
+router.get('/directory', listDirectory);
 
 module.exports = router;

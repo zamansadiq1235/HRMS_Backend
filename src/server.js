@@ -18,6 +18,9 @@ const meetingsRoutes = require('./routes/meetings.routes');
 const leaveRoutes = require('./routes/leave.routes');
 const payrollRoutes = require('./routes/payroll.routes');
 const profileRoutes = require('./routes/profile.routes');
+const notificationsRoutes = require('./routes/notifications.routes');
+const dashboardRoutes = require('./routes/dashboard.routes');
+const chatRoutes = require('./routes/chat.routes');
 
 const app = express();
 
@@ -42,6 +45,9 @@ app.use('/api/meetings', meetingsRoutes);
 app.use('/api/leave', leaveRoutes);
 app.use('/api/payroll', payrollRoutes);
 app.use('/api/employees/me', profileRoutes);
+app.use('/api/notifications', notificationsRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/chat', chatRoutes);
 
 app.use((err, req, res, next) => {
   console.error(err);
