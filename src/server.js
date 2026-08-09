@@ -30,7 +30,7 @@ app.use(express.json());
 app.use(morgan('dev'));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
 
-app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString(), buildMarker: 'PHASE4-CHECK-001' }));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/employees', employeesRoutes);
