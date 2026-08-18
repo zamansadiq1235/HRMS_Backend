@@ -17,7 +17,14 @@ async function listPayroll(req, res) {
     const result = await queryAsTenant(
       req.tenantContext,
       `select p.id, p.employee_id, p.period_month, p.period_year, p.gross_pay, p.net_pay, p.status,
-              u.full_name as employee_name
+              u.full_name as employee_name,
+              coalesce((
+                select round(sum(extract(epoch from (coalesce(a.check_out, a.check_in) - a.check_in))) / 3600.0, 2)
+                from attendance a
+                where a.employee_id = p.employee_id
+                  and extract(month from a.check_in) = p.period_month
+                  and extract(year from a.check_in) = p.period_year
+              ), 0) as total_hours
        from payroll p
        join employees e on e.id = p.employee_id
        join users u on u.id = e.user_id

@@ -16,7 +16,8 @@ async function getMyProfile(req, res) {
     const result = await queryAsTenant(
       req.tenantContext,
       `select e.id, e.employee_code, e.designation, e.employment_status,
-              e.phone, e.address, e.education, e.tech_skills, e.experience_years,
+              e.phone, e.address, e.date_of_birth, e.country, e.state, e.city,
+              e.education, e.tech_skills, e.experience_years,
               e.department_id, e.branch_id, e.date_of_joining,
               u.full_name, u.email, u.avatar_url, u.status as account_status
        from employees e
@@ -36,7 +37,10 @@ async function updateMyProfile(req, res) {
   if (!req.auth.employeeId) {
     return res.status(400).json({ error: 'No employee record linked to this account' });
   }
-  const { fullName, phone, address, education, techSkills, experienceYears } = req.body;
+  const {
+    fullName, phone, address, dateOfBirth, country, state, city,
+    education, techSkills, experienceYears,
+  } = req.body;
 
   try {
     if (fullName) {
@@ -53,17 +57,21 @@ async function updateMyProfile(req, res) {
       `update employees set
          phone = coalesce($1, phone),
          address = coalesce($2, address),
-         education = coalesce($3, education),
-         tech_skills = coalesce($4, tech_skills),
-         experience_years = coalesce($5, experience_years)
-       where id = $6
-       returning id, phone, address, education, tech_skills, experience_years`,
+         date_of_birth = coalesce($3, date_of_birth),
+         country = coalesce($4, country),
+         state = coalesce($5, state),
+         city = coalesce($6, city),
+         education = coalesce($7, education),
+         tech_skills = coalesce($8, tech_skills),
+         experience_years = coalesce($9, experience_years)
+       where id = $10
+       returning id, phone, address, date_of_birth, country, state, city,
+                 education, tech_skills, experience_years`,
       [
-        phone || null,
-        address || null,
+        phone || null, address || null, dateOfBirth || null,
+        country || null, state || null, city || null,
         education ? JSON.stringify(education) : null,
-        techSkills || null,
-        experienceYears ?? null,
+        techSkills || null, experienceYears ?? null,
         req.auth.employeeId,
       ]
     );

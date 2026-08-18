@@ -1,15 +1,21 @@
 const { queryAsTenant } = require('../config/db');
 
 async function listAssets(req, res) {
+  const { mine } = req.query;
+  const canViewAll = req.auth.permissions.includes('*') || req.auth.permissions.includes('asset.manage');
+  const onlyMine = mine === 'true' || !canViewAll;
+
   try {
     const result = await queryAsTenant(
       req.tenantContext,
-      `select a.id, a.name, a.asset_type, a.serial_number, a.status,
+      `select a.id, a.name, a.asset_type, a.serial_number, a.status, a.purchase_date,
               a.assigned_to, a.assigned_at, u.full_name as assigned_to_name
        from assets a
        left join employees e on e.id = a.assigned_to
        left join users u on u.id = e.user_id
-       order by a.created_at desc`
+       ${onlyMine ? 'where a.assigned_to = $1' : ''}
+       order by a.created_at desc`,
+      onlyMine ? [req.auth.employeeId] : []
     );
     res.json({ assets: result.rows });
   } catch (err) {
