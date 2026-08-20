@@ -21,6 +21,8 @@ const profileRoutes = require('./routes/profile.routes');
 const notificationsRoutes = require('./routes/notifications.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const chatRoutes = require('./routes/chat.routes');
+const companySettingsRoutes = require('./routes/companySettings.routes');
+
 
 const app = express();
 app.set('trust proxy', 1);
@@ -49,6 +51,7 @@ app.use('/api/employees/me', profileRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/company-settings', companySettingsRoutes);
 
 app.use((err, req, res, next) => {
   console.error(err);
