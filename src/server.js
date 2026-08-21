@@ -22,6 +22,8 @@ const notificationsRoutes = require('./routes/notifications.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const chatRoutes = require('./routes/chat.routes');
 const companySettingsRoutes = require('./routes/companySettings.routes');
+const platformCompaniesRoutes = require('./routes/platformCompanies.routes');
+const platformDashboardRoutes = require('./routes/platformDashboard.routes');
 
 
 const app = express();
@@ -52,6 +54,8 @@ app.use('/api/notifications', notificationsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/company-settings', companySettingsRoutes);
+app.use('/api/platform/companies', platformCompaniesRoutes);
+app.use('/api/platform/dashboard', platformDashboardRoutes);
 
 app.use((err, req, res, next) => {
   console.error(err);

@@ -46,4 +46,11 @@ function requirePermission(permissionKey) {
   };
 }
 
-module.exports = { requireAuth, requireRole, requirePermission };
+function requirePlatformOwner(req, res, next) {
+  if (!req.auth || !req.auth.isPlatformOwner) {
+    return res.status(403).json({ error: 'Platform owner access required' });
+  }
+  next();
+}
+
+module.exports = { requireAuth, requireRole, requirePermission, requirePlatformOwner };
