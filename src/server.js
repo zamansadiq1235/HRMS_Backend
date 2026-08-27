@@ -25,6 +25,8 @@ const companySettingsRoutes = require('./routes/companySettings.routes');
 const platformCompaniesRoutes = require('./routes/platformCompanies.routes');
 const platformDashboardRoutes = require('./routes/platformDashboard.routes');
 const plansRoutes = require('./routes/plans.routes');
+const featureFlagsRoutes = require('./routes/featureFlags.routes');
+
 
 
 
@@ -59,6 +61,7 @@ app.use('/api/company-settings', companySettingsRoutes);
 app.use('/api/platform/companies', platformCompaniesRoutes);
 app.use('/api/platform/dashboard', platformDashboardRoutes);
 app.use('/api/platform/plans', plansRoutes);
+app.use('/api/platform/feature-flags', featureFlagsRoutes);
 
 app.use((err, req, res, next) => {
   console.error(err);
