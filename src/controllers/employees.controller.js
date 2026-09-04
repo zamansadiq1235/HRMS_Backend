@@ -2,6 +2,8 @@ const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const { queryAsTenant, pool } = require('../config/db');
 const { notify } = require('../utils/notify');
+const { logActivity } = require('../utils/logActivity'); // add to top imports
+
 
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
@@ -70,7 +72,7 @@ async function createEmployee(req, res) {
   const {
     email, fullName, phone, address, gender, education, techSkills, experienceYears,
     designation, departmentId, branchId, dateOfJoining, roleName,
-    avatarBase64, avatarExt, // both optional — if omitted, employee adds their own photo later
+    avatarBase64, avatarExt,
   } = req.body;
 
   if (!email || !fullName) {
@@ -85,7 +87,51 @@ async function createEmployee(req, res) {
 
   const genderValue = ALLOWED_GENDERS.includes(gender) ? gender : null;
   const tempPassword = generateTempPassword();
+
+  // 1. Create Auth User outside DB lock, with cleanup tracking
+  let createdUser = null;
+  try {
+    const { data: created, error: createError } = await supabaseAdmin.auth.admin.createUser({
+      email,
+      password: tempPassword,
+      email_confirm: true,
+    });
+
+    if (createError || !created?.user) {
+      const isDup = /already been registered|already exists/i.test(createError?.message || '');
+      return res.status(isDup ? 409 : 400).json({ 
+        error: isDup ? 'An employee with this email already exists' : (createError?.message || 'Failed to create login account') 
+      });
+    }
+    createdUser = created.user;
+  } catch (authErr) {
+    console.error('Supabase auth creation error:', authErr);
+    return res.status(500).json({ error: 'Failed to create user credentials' });
+  }
+
+  // 2. Upload optional avatar
+  let avatarUrl = null;
+  if (avatarBase64 && avatarExt) {
+    try {
+      const buffer = Buffer.from(avatarBase64, 'base64');
+      const filePath = `${createdUser.id}/avatar.${avatarExt}`;
+      const { error: uploadError } = await supabaseAdmin.storage
+        .from(AVATAR_BUCKET)
+        .upload(filePath, buffer, { contentType: `image/${avatarExt}`, upsert: true });
+
+      if (!uploadError) {
+        avatarUrl = supabaseAdmin.storage.from(AVATAR_BUCKET).getPublicUrl(filePath).data.publicUrl;
+      }
+    } catch (avatarErr) {
+      console.error('Avatar upload failed during employee creation:', avatarErr);
+    }
+  }
+
+  // 3. Database Transaction
   const client = await pool.connect();
+  let dbCommitted = false;
+  let employeeData = null;
+
   try {
     await client.query('BEGIN');
     await client.query("select set_config('app.is_platform_owner', 'false', true)");
@@ -97,39 +143,10 @@ async function createEmployee(req, res) {
     if (roleRows.length === 0) throw new Error(`Role '${targetRole}' not found`);
     const roleId = roleRows[0].id;
 
-    const { data: created, error: createError } = await supabaseAdmin.auth.admin.createUser({
-      email,
-      password: tempPassword,
-      email_confirm: true,
-    });
-    if (createError || !created?.user) {
-      throw new Error(createError?.message || 'Failed to create login account');
-    }
-
-    // Optional avatar — uploaded before the users row so avatar_url can be
-    // set in the same insert. A failed upload never blocks employee
-    // creation; avatarUrl just stays null and they can add one later from
-    // their own Profile screen.
-    let avatarUrl = null;
-    if (avatarBase64 && avatarExt) {
-      try {
-        const buffer = Buffer.from(avatarBase64, 'base64');
-        const filePath = `${created.user.id}/avatar.${avatarExt}`;
-        const { error: uploadError } = await supabaseAdmin.storage
-          .from(AVATAR_BUCKET)
-          .upload(filePath, buffer, { contentType: `image/${avatarExt}`, upsert: true });
-        if (!uploadError) {
-          avatarUrl = supabaseAdmin.storage.from(AVATAR_BUCKET).getPublicUrl(filePath).data.publicUrl;
-        }
-      } catch (avatarErr) {
-        console.error('Avatar upload failed during employee creation:', avatarErr);
-      }
-    }
-
     await client.query(
       `insert into users (id, company_id, role_id, email, full_name, avatar_url, status)
        values ($1, $2, $3, $4, $5, $6, 'active')`,
-      [created.user.id, req.tenantContext.companyId, roleId, email, fullName, avatarUrl]
+      [createdUser.id, req.tenantContext.companyId, roleId, email, fullName, avatarUrl]
     );
 
     const employeeCode = await nextEmployeeCode(req.tenantContext.companyId);
@@ -142,41 +159,58 @@ async function createEmployee(req, res) {
        returning id, employee_code, designation, department_id, branch_id,
                  date_of_joining, phone, address, gender, education, tech_skills, experience_years`,
       [
-        req.tenantContext.companyId, created.user.id, employeeCode, designation || null,
+        req.tenantContext.companyId, createdUser.id, employeeCode, designation || null,
         departmentId || null, branchId || null, dateOfJoining || null, phone || null,
-        address || null, genderValue, JSON.stringify(education || []), techSkills || [],
+        address || null, genderValue, JSON.stringify(education || []), JSON.stringify(techSkills || []),
         experienceYears || null,
       ]
     );
 
     await client.query('COMMIT');
-
-    await notify({
-      companyId: req.tenantContext.companyId,
-      userId: created.user.id,
-      title: 'Welcome!',
-      body: `Your account has been created. Employee ID: ${employeeCode}`,
-    });
-
-    res.status(201).json({
-      employee: { ...employeeRows[0], email, fullName, avatarUrl, role: targetRole },
-      loginCredentials: {
-        employeeId: employeeRows[0].employee_code,
-        email,
-        temporaryPassword: tempPassword,
-      },
-    });
+    dbCommitted = true;
+    employeeData = employeeRows[0];
   } catch (err) {
-    await client.query('ROLLBACK');
-    console.error(err);
-    const isDuplicateEmail = /already been registered|already exists/i.test(err.message || '');
-    if (isDuplicateEmail) {
-      return res.status(409).json({ error: 'An employee with this email already exists' });
+    if (!dbCommitted) {
+      await client.query('ROLLBACK');
+      // Rollback orphaned Supabase auth user so retries work
+      await supabaseAdmin.auth.admin.deleteUser(createdUser.id).catch(console.error);
     }
-    res.status(500).json({ error: err.message || 'Failed to create employee' });
+    console.error('Error creating employee in DB:', err);
+    return res.status(500).json({ error: err.message || 'Failed to create employee' });
   } finally {
     client.release();
   }
+
+  // 4. Post-transaction Side Effects (Wrapped in catch block so client gets success even if notification fails)
+  try {
+    await notify({
+      companyId: req.tenantContext.companyId,
+      userId: createdUser.id,
+      title: 'Welcome!',
+      body: `Your account has been created. Employee ID: ${employeeData.employee_code}`,
+    });
+
+    await logActivity({
+      companyId: req.tenantContext.companyId,
+      userId: req.auth.userId,
+      action: 'created employee',
+      entity: 'employee',
+      entityId: employeeData.id,
+      metadata: { name: fullName, email },
+    });
+  } catch (sideEffectErr) {
+    console.error('Post-creation side effect failed (notify/logActivity):', sideEffectErr);
+  }
+
+  // 5. Send Success Response
+  return res.status(201).json({
+    employee: { ...employeeData, email, fullName, avatarUrl, role: targetRole },
+    loginCredentials: {
+      employeeId: employeeData.employee_code,
+      email,
+      temporaryPassword: tempPassword,
+    },
+  });
 }
 
 async function updateEmployee(req, res) {

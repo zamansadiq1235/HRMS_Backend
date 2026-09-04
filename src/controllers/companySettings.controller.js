@@ -4,7 +4,8 @@ async function getCompanySettings(req, res) {
   try {
     const result = await queryAsTenant(
       req.tenantContext,
-      `select name, industry, country, timezone, office_lat, office_lng, geofence_radius_meters
+      `select name, industry, country, timezone, office_lat, office_lng, geofence_radius_meters,
+              default_clock_in, default_clock_out
        from companies where id = $1`,
       [req.tenantContext.companyId]
     );
@@ -18,6 +19,8 @@ async function getCompanySettings(req, res) {
       officeLat: row.office_lat ? Number(row.office_lat) : null,
       officeLng: row.office_lng ? Number(row.office_lng) : null,
       geofenceRadiusMeters: row.geofence_radius_meters,
+      defaultClockIn: row.default_clock_in,
+      defaultClockOut: row.default_clock_out,
     });
   } catch (err) {
     console.error(err);
@@ -26,22 +29,27 @@ async function getCompanySettings(req, res) {
 }
 
 async function updateCompanySettings(req, res) {
-  const { officeLat, officeLng, geofenceRadiusMeters } = req.body;
+  const { officeLat, officeLng, geofenceRadiusMeters, defaultClockIn, defaultClockOut } = req.body;
   try {
     const result = await queryAsTenant(
       req.tenantContext,
       `update companies set
          office_lat = coalesce($1, office_lat),
          office_lng = coalesce($2, office_lng),
-         geofence_radius_meters = coalesce($3, geofence_radius_meters)
-       where id = $4
-       returning office_lat, office_lng, geofence_radius_meters`,
-      [officeLat ?? null, officeLng ?? null, geofenceRadiusMeters ?? null, req.tenantContext.companyId]
+         geofence_radius_meters = coalesce($3, geofence_radius_meters),
+         default_clock_in = coalesce($4, default_clock_in),
+         default_clock_out = coalesce($5, default_clock_out)
+       where id = $6
+       returning office_lat, office_lng, geofence_radius_meters, default_clock_in, default_clock_out`,
+      [officeLat ?? null, officeLng ?? null, geofenceRadiusMeters ?? null, defaultClockIn ?? null, defaultClockOut ?? null, req.tenantContext.companyId]
     );
+    const row = result.rows[0];
     res.json({
-      officeLat: result.rows[0].office_lat ? Number(result.rows[0].office_lat) : null,
-      officeLng: result.rows[0].office_lng ? Number(result.rows[0].office_lng) : null,
-      geofenceRadiusMeters: result.rows[0].geofence_radius_meters,
+      officeLat: row.office_lat ? Number(row.office_lat) : null,
+      officeLng: row.office_lng ? Number(row.office_lng) : null,
+      geofenceRadiusMeters: row.geofence_radius_meters,
+      defaultClockIn: row.default_clock_in,
+      defaultClockOut: row.default_clock_out,
     });
   } catch (err) {
     console.error(err);

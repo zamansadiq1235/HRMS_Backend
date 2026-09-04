@@ -1,5 +1,7 @@
 const { queryAsTenant } = require('../config/db');
 const { notify } = require('../utils/notify');
+const { logActivity } = require('../utils/logActivity'); // add to top imports
+
 
 async function listTasks(req, res) {
   const { status, date } = req.query;
@@ -35,24 +37,74 @@ async function listTasks(req, res) {
 
 async function createTask(req, res) {
   const { title, description, assignedTo, dueDate } = req.body;
-  if (!title || !assignedTo) return res.status(400).json({ error: 'title and assignedTo are required' });
+
+  if (!title || !assignedTo) {
+    return res.status(400).json({ error: 'title and assignedTo are required' });
+  }
+
+  let createdTask = null;
+  let assigneeUserId = null;
+
   try {
+    // 1. Verify assignee exists and fetch user_id up front
+    const assigneeRes = await queryAsTenant(
+      req.tenantContext,
+      `select user_id from employees where id = $1`,
+      [assignedTo]
+    );
+
+    if (assigneeRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Assigned employee not found' });
+    }
+
+    assigneeUserId = assigneeRes.rows[0].user_id;
+
+    // 2. Insert task into database
     const result = await queryAsTenant(
       req.tenantContext,
       `insert into tasks (company_id, title, description, assigned_to, assigned_by, due_date)
        values ($1, $2, $3, $4, $5, $6)
        returning id, title, description, status, assigned_to, due_date, created_at`,
-      [req.tenantContext.companyId, title, description || null, assignedTo, req.auth.employeeId || null, dueDate || null]
+      [
+        req.tenantContext.companyId,
+        title,
+        description || null,
+        assignedTo,
+        req.auth.employeeId || null,
+        dueDate || null,
+      ]
     );
-    const assigneeUser = await queryAsTenant(req.tenantContext, `select user_id from employees where id = $1`, [assignedTo]);
-    if (assigneeUser.rows[0]) {
-      await notify({ companyId: req.tenantContext.companyId, userId: assigneeUser.rows[0].user_id, title: 'New task assigned', body: title });
-    }
-    res.status(201).json({ task: result.rows[0] });
+
+    createdTask = result.rows[0];
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to create task' });
+    console.error('Error creating task:', err);
+    return res.status(500).json({ error: 'Failed to create task' });
   }
+
+  // 3. Isolated side effects (Notification & Activity Log)
+  try {
+    if (assigneeUserId) {
+      await notify({
+        companyId: req.tenantContext.companyId,
+        userId: assigneeUserId,
+        title: 'New task assigned',
+        body: title,
+      });
+    }
+
+    await logActivity({
+      companyId: req.tenantContext.companyId,
+      userId: req.auth.userId,
+      action: 'assigned task',
+      entity: 'task',
+      entityId: createdTask.id,
+      metadata: { title },
+    });
+  } catch (sideEffectErr) {
+    console.error('Task creation side-effect failed (notify/logActivity):', sideEffectErr);
+  }
+
+  return res.status(201).json({ task: createdTask });
 }
 
 async function updateTask(req, res) {

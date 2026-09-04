@@ -102,23 +102,48 @@ async function submitExpense(req, res) {
 
 async function updateExpenseStatus(req, res) {
   const { id } = req.params;
-  const { status } = req.body;
+  const { status } = req.body || {};
   const allowed = ['approved', 'rejected', 'reimbursed'];
-  if (!allowed.includes(status)) {
-    return res.status(400).json({ error: `status must be one of: ${allowed.join(', ')}` });
+
+  if (!status || !allowed.includes(status)) {
+    return res.status(400).json({ 
+      error: `status is required and must be one of: ${allowed.join(', ')}` 
+    });
   }
+
+  let updatedExpense = null;
+
   try {
     const result = await queryAsTenant(
       req.tenantContext,
       `update expenses set status = $1 where id = $2 returning id, status`,
       [status, id]
     );
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Expense not found' });
-    res.json({ expense: result.rows[0] });
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Expense not found' });
+    }
+
+    updatedExpense = result.rows[0];
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to update expense' });
+    console.error('Error updating expense status:', err);
+    return res.status(500).json({ error: 'Failed to update expense' });
   }
+
+  // Non-blocking side effect: log activity after DB update is guaranteed complete
+  try {
+    await logActivity({
+      companyId: req.tenantContext.companyId,
+      userId: req.auth.userId,
+      action: `${status} expense`,
+      entity: 'expense',
+      entityId: id,
+    });
+  } catch (logErr) {
+    console.error('Failed to record activity log for expense update:', logErr);
+  }
+
+  return res.json({ expense: updatedExpense });
 }
 
 module.exports = { listExpenseCategories, listExpenses, submitExpense, updateExpenseStatus };

@@ -1,4 +1,6 @@
 const { queryAsTenant } = require('../config/db');
+const { logActivity } = require('../utils/logActivity'); // add to top imports
+
 
 async function listLeaveTypes(req, res) {
   try {
@@ -90,6 +92,14 @@ async function updateLeaveStatus(req, res) {
     console.error(err);
     res.status(500).json({ error: 'Failed to update leave request' });
   }
+
+  await logActivity({
+  companyId: req.tenantContext.companyId,
+  userId: req.auth.userId,
+  action: `${status} leave request`,
+  entity: 'leave_request',
+  entityId: id,
+});
 }
 
 module.exports = { listLeaveTypes, listLeaveRequests, submitLeaveRequest, updateLeaveStatus };
